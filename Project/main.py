@@ -1,142 +1,274 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
-import re
-import urllib2
-
 import sys
+from time import sleep
+
 from PyQt4 import QtGui
+from PyQt4.QtCore import Qt
 
-from grab import Grab
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.support.ui import Select
 
-from ui.Ui_main import Ui_MainFrom
-from lib.config import VERSION
-
-# get region (by xparentId of subject)
-REGION_URL = 'https://rosreestr.ru/wps/PA_FCCLPGUOReqService/ru.fccland.pgu.online.request?ru.fccland.ibmportal.spring.portlet.handler.BeanNameParameterHandlerMapping-PATH=%2FChildsRegionController&ru.fccland.ibmportal.spring.portlet.dispatcher.DispatcherServiceServlet.directRequest=x&parentId={parent_id}'
-# get city type (by xparentId of region)
-CITY_TYPE_URL = 'https://rosreestr.ru/wps/PA_FCCLPGUOReqService/ru.fccland.pgu.online.request?ru.fccland.ibmportal.spring.portlet.handler.BeanNameParameterHandlerMapping-PATH=%2FChildsRegionTypesController&ru.fccland.ibmportal.spring.portlet.dispatcher.DispatcherServiceServlet.directRequest=x&parentId={parent_id}'
-# get city (by xparentId of region)
-CITY_URL = 'https://rosreestr.ru/wps/PA_FCCLPGUOReqService/ru.fccland.pgu.online.request?ru.fccland.ibmportal.spring.portlet.handler.BeanNameParameterHandlerMapping-PATH=%2FChildsRegionController&ru.fccland.ibmportal.spring.portlet.dispatcher.DispatcherServiceServlet.directRequest=x&parentId={parent_id}&settlement_type=set0&add_settlement_type=true'
-# base url
-BASE_URL = 'https://rosreestr.ru/wps/portal/online_request'
-
-
-class CCmbParser(object):
-    def __init__(self, url=BASE_URL):
-        self.option_pattern = re.compile('\n*\s*<option value="(.*)">(.*)<\/option>\n*')
-        self.url = url
-        self.soup = BeautifulSoup(self.__get_html(self.url), "html.parser")
-
-    @staticmethod
-    def __get_html(url):
-        return urllib2.urlopen(url).read()
-
-    def __parse_cmb(self, cmb_name, isName=True):
-        if isName:
-            self.select_pattern = re.compile('(<select name="%s".*>(\n*\s*<option .*>.*<\/option>\n*)*)' % cmb_name)
-        else:
-            self.select_pattern = re.compile('(<select .* id="%s".*>(\n*\s*<option .*>.*<\/option>\n*)*)' % cmb_name)
-
-        select_struct = re.findall(self.select_pattern, str(self.soup))
-        result = re.findall(self.option_pattern, select_struct[0][0]) if select_struct else []
-        return map(lambda x: {'id': x[0], 'name': x[1].decode('utf-8')}, result)
-
-    def get_subjects(self):
-        return self.__parse_cmb('subjectId', False)
-
-    def get_regions(self):
-        return self.__parse_cmb('rSubjectId', False)
-
-    def get_street_type(self):
-        return self.__parse_cmb('street_type', True)
-
-    def get_city_types(self):
-        return self.__parse_cmb('settlement_type', True)
-
-    def get_cities(self):
-        return self.__parse_cmb('settlement_id', True)
+from lib.cmbfiller import CCmbFiller
+from lib.config import VERSION, DEBUG, BASE_URL, CHROME_PATH, PHANTOMJS_PATH, SERVICE_LOG_PATH, \
+    SERVICE_SCREENSHOT_PATH, SUBMIT_ATTEMPT, SLEEP_TIME, EMPTY_CMB_RECORD, RE_OBJCOUNT_PATTERN, RE_DATA_PATTERN
+from lib.result import CResultForm
+from ui.ui_main import Ui_MainFrom
 
 
 class CGrabProject(QtGui.QDialog, Ui_MainFrom):
     def __init__(self):
+        # initialize ui
         QtGui.QDialog.__init__(self)
         Ui_MainFrom.__init__(self)
         self.setupUi(self)
+        self.setWindowFlags(Qt.WindowSystemMenuHint | Qt.WindowTitleHint)
+        self.setWindowIcon(QtGui.QIcon('favicon.ico'))
 
-        self.grab = Grab()
-        self.grab.go(BASE_URL)
-        self.grab.doc.set_input('search_type', 'ADDRESS')
+        # select webdriver
+        if DEBUG:
+            self.driver = webdriver.Chrome(executable_path=CHROME_PATH)
+        else:
+            self.driver = webdriver.PhantomJS(executable_path=PHANTOMJS_PATH, service_log_path=SERVICE_LOG_PATH)
+        # move to BASE_URL page
+        self.driver.get(BASE_URL)
 
-        cmbSubject = CCmbParser()
-        cmbSubject.soup = self.grab.doc.body
-        self.subjectsList = cmbSubject.get_subjects()
+        # flag of disable QComboBox update
+        self.disableChange = False
+
+        # select option "Адрес"
+        self.driver.find_element_by_id('adress').click()
+
+        # initialize class for filling QComboBoxes by items from dynamic page
+        self.cmbFiller = CCmbFiller(BASE_URL, soup=self.driver.page_source)
+
+        # first initialize all QComboBoxes
+        self.initAllComboBoxes()
+
+        # create connections with some methods of ui elements
+        self.btnSubmit.clicked.connect(self.submitForm)
+        self.cmbSubject.currentIndexChanged.connect(self.subjectChanged)
+        self.cmbRegion.currentIndexChanged.connect(self.regionChanged)
+        self.cmbCity.currentIndexChanged.connect(self.cityChanged)
+        self.cmbCityType.currentIndexChanged.connect(self.cityTypeChanged)
+        self.cmbStreetType.currentIndexChanged.connect(self.streetTypeChanged)
+        self.btnClear.clicked.connect(self.clearFields)
+
+    def initAllComboBoxes(self):
+        self.applyCmbChange('subject_id', '110000000000')
+        self.applyCmbChange('subject_id', '101000000000')
+
+        self.subjectsList = self.cmbFiller.getSubjects()
         self.fillComboBox(self.cmbSubject, self.subjectsList)
 
-        self.btnSubmit.clicked.connect(self.f)
+        self.subjectChanged()
 
-    @staticmethod
-    def get_info(url):
-        import pycurl
-        import cStringIO
+        self.applyCmbChange('region_id', self.regionList[2]['id'])
+        self.applyCmbChange('region_id', self.regionList[1]['id'])
 
-        buf = cStringIO.StringIO()
+    def subjectChanged(self):
+        if not self.disableChange:
+            self.regionList = self.cmbFiller.getRegions(self.subjectsList[self.cmbSubject.currentIndex()]['id'])
+            self.fillComboBox(self.cmbRegion, self.regionList)
+            # self.applyCmbChange('subject_id', self.subjectsList[self.cmbSubject.currentIndex()]['id'])
 
-        c = pycurl.Curl()
-        c.setopt(c.URL, url)
-        c.setopt(c.WRITEFUNCTION, buf.write)
-        c.perform()
+            self.regionChanged()
 
-        result = buf.getvalue()
-        buf.close()
-        return result
+    def regionChanged(self):
+        if not self.disableChange:
+            self.cityTypeList = self.cmbFiller.getCityTypes(self.regionList[self.cmbRegion.currentIndex()]['id'])
+            self.fillComboBox(self.cmbCityType, self.cityTypeList)
+            # self.applyCmbChange('region_id', self.regionList[self.cmbRegion.currentIndex()]['id'])
 
-    @staticmethod
-    def fillComboBox(cmb, values):
+            self.cityTypeChanged()
+
+    def cityChanged(self):
+        if not self.disableChange:
+            pass
+            # self.applyCmbChange('settlement_id', self.cityList[self.cmbCity.currentIndex()]['id'])
+
+    def cityTypeChanged(self):
+        if not self.disableChange:
+            self.cityList = self.cmbFiller.getCities(
+                self.regionList[self.cmbRegion.currentIndex()]['id'],
+                self.cityTypeList[self.cmbCityType.currentIndex()]['id']
+            )
+            self.fillComboBox(self.cmbCity, self.cityList)
+            # self.applyCmbChange('settlement_type', self.cityTypeList[self.cmbCityType.currentIndex()]['id'])
+
+            self.streetTypeList = self.cmbFiller.getStreetType()
+            self.fillComboBox(self.cmbStreetType, self.streetTypeList)
+            self.streetTypeChanged()
+            self.cityChanged()
+
+    def streetTypeChanged(self):
+        if not self.disableChange:
+            pass
+            # self.applyCmbChange('street_type', self.streetTypeList[self.cmbStreetType.currentIndex()]['id'])
+
+    def fillComboBox(self, cmb, values):
+        cmb.clear()
+        self.disableChange = True
         map(lambda x: cmb.addItem(x['name']), values)
+        self.disableChange = False
 
-    def f(self):
-        g = Grab(log_file='out.log')
-        g.go(BASE_URL)
+    def execWithSleep(self, func, name, value, time=SLEEP_TIME):
+        attempt = SUBMIT_ATTEMPT
+        while attempt:
+            try:
+                func(name, value)
+                attempt = 0
+                if attempt == 3:
+                    sleep(time)
+            except Exception as e:
+                print '[GrabProject] execWithSleep error, try again. Attempt: %s | Message: "%s"' % (
+                    attempt,
+                    e.msg if hasattr(e, 'msg') else e.message
+                )
+                attempt -= 1
 
-        c = CCmbParser()
-        c.soup = g.doc.body
-        g.doc.set_input('search_type', 'ADDRESS')
-        c.soup = g.doc.body
-        a = c.get_subjects()
-        self.fillComboBox(self.cmbSubject, a)
-        g.doc.set_input('subject_id', '130000000000')
-        g.doc.set_input('region_id', '145286000000')
-        g.doc.set_input('settlement_id', '145298578000')
-        #g.doc.set_input('subject_id', '130000000000')
-        #g.doc.set_input('124000000000', 'checked="true"')
-        c.soup = g.doc.body
-        b = c.get_regions()
-        c1 = c.get_street_type()
-        d = c.get_city_types()
-        e = c.get_cities()
-        # Ищем слово "Новости" на странице
-        # print(u"На этой странице есть слово \"Новости\"? %s" % u'Да' if g.doc.text_search(u'Новости') else u'Нет')
-        # выводим тайтл страницы
-        print(u"Заголовок страницы: '%s'" % g.doc.select('//title').text())
+    def sendCmbValue(self, cmb, cmbValueList, cmbName, withSleep=True, defaultValue='-1'):
+        if cmbValueList[cmb.currentIndex()]['id'] != EMPTY_CMB_RECORD['id']:
+            value = cmbValueList[cmb.currentIndex()]['id']
+        else:
+            value = defaultValue
 
-        g.doc.set_input('search_type', 'ADDRESS')
+        self.execWithSleep(
+            self.applyCmbChange,
+            cmbName,
+            value,
+            SLEEP_TIME if withSleep else 0
+        )
 
-        f = g.doc.submit()
-        print 'zi'
-        pass
-        # получаем первую ссылку из запроса яндекса) Ссылку на годную статейку
-        # print(u"Годная ссылочка на хабр про грабик: %s" % g.doc.select('//li[@class="serp-item"]//a').attr('href'))
+    def applyCmbChange(self, cmb, value):
+        Select(self.driver.find_element_by_xpath("//select[@name='%s']" % cmb)).select_by_value(value)
 
+    def applyEdtChange(self, edt, value):
+        i = str(value.toUtf8())
+        i = unicode(i.decode("utf8"))
+        element = self.driver.find_element_by_css_selector("INPUT[name=\"%s\"]" % edt)
+        element.clear()
+        element.send_keys(i)
+        # self.driver.find_element_by_name(edt).send_keys(value)
 
+    def submitForm(self):
+        try:
+            submit = self.driver.find_element_by_id('submit-button')
+
+            attempt = SUBMIT_ATTEMPT
+            self.loadProgress.setValue(10)
+            while attempt:
+                try:
+                    # send changes to form
+                    self.sendCmbValue(self.cmbSubject, self.subjectsList, 'subject_id')
+                    self.sendCmbValue(self.cmbRegion, self.regionList, 'region_id')
+                    self.sendCmbValue(self.cmbCityType, self.cityTypeList, 'settlement_type')
+                    self.sendCmbValue(self.cmbCity, self.cityList, 'settlement_id')
+                    self.sendCmbValue(
+                        self.cmbStreetType,
+                        self.streetTypeList,
+                        'street_type',
+                        withSleep=False,
+                        defaultValue='str0'
+                    )
+
+                    self.applyEdtChange('street', self.edtStreet.text())
+                    self.applyEdtChange('house', self.edtHouseNumber.text())
+                    self.applyEdtChange('building', self.edtBuilding.text())
+                    self.applyEdtChange('structure', self.edtStructure.text())
+                    self.applyEdtChange('apartment', self.edtApartment.text())
+
+                    attempt = 0
+                except Exception as e:
+                    print '[GrabProject] Submit error, try again. Attempt: %s | Message: "%s"' % (
+                        attempt,
+                        e.msg if hasattr(e, 'msg') else e.message
+                    )
+                    if not DEBUG:
+                        self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_error_load.png')
+                    attempt -= 1
+
+            if not DEBUG:
+                self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_after.png')
+            submit.click()
+            self.parseInfo()
+        except Exception as e:
+            print '[GrabProject] Submit fatal error: "%s"' % (
+                e.msg if hasattr(e, 'msg') else e.message
+            )
+            if not DEBUG:
+                self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_fatal_error.png')
+        finally:
+            self.driver.find_element_by_id('online_request_search_crit_img').click()
+
+    def parseInfo(self):
+        import re
+        sleep(SLEEP_TIME)
+
+        parse = re.findall(RE_OBJCOUNT_PATTERN, self.driver.page_source)
+        if parse:
+            objCount = int(parse[0])
+            self.loadProgress.setMaximum(objCount)
+            data = re.findall(RE_DATA_PATTERN, self.driver.page_source)
+            if objCount > 20:
+                self.driver.find_element_by_id('PC_7_015A1H40IOMCC0ACRHALLM30A1000000_js_es0').click()
+
+            self.loadProgress.setValue(len(data))
+
+            while objCount > len(data):
+                data += re.findall(RE_DATA_PATTERN, self.driver.page_source)
+                self.loadProgress.setValue(len(data))
+                self.show()
+                if not DEBUG:
+                    self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_parse_datalen%s.png' % len(data))
+                d = self.driver.find_element_by_id('PC_7_015A1H40IOMCC0ACRHALLM30A1000000_js_es2')
+                d.click()
+
+            dlg = CResultForm(self, data)
+            dlg.setTableBody(data)
+            dlg.exec_()
+            self.loadProgress.setValue(0)
+            if dlg.status == 0:
+                self.close()
+        else:
+            self.loadProgress.setValue(0)
+            QtGui.QMessageBox.warning(
+                self,
+                u'Формирование запроса',
+                u'По текущему запросу ничего не найдено. Проверьте введенные данные.',
+                QtGui.QMessageBox.Ok
+            )
+
+    def clearFields(self):
+        self.edtStructure.clear()
+        self.edtBuilding.clear()
+        self.edtApartment.clear()
+        self.edtHouseNumber.clear()
+        self.edtStreet.clear()
+
+        self.cmbSubject.setCurrentIndex(0)
+        self.cmbRegion.setCurrentIndex(0)
+        self.cmbCityType.setCurrentIndex(0)
+        self.cmbCity.setCurrentIndex(0)
+
+        self.loadProgress.setValue(0)
 
 
 def main():
-    print u"[GrabProject] Текущая версия программы: %s" % VERSION
-    app = QtGui.QApplication(sys.argv)
-    win = CGrabProject()
-    win.show()
-    app.exec_()
+    try:
+        print u"[GrabProject] Current programm version: %s" % VERSION
+
+        app = QtGui.QApplication(sys.argv)
+        win = CGrabProject()
+        win.show()
+        app.exec_()
+    except Exception as e:
+        QtGui.QMessageBox.warning(
+            None,
+            u'Предупреждение',
+            u'Непредвиденная ошибка:\n%s' % e.msg if hasattr(e, 'msg') else e.message,
+            QtGui.QMessageBox.Ok
+        )
 
 
 if __name__ == '__main__':
