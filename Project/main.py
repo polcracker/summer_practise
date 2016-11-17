@@ -27,7 +27,11 @@ class CGrabProject(QtGui.QDialog, Ui_MainFrom):
 
         # select webdriver
         if DEBUG:
-            self.driver = webdriver.Chrome(executable_path=CHROME_PATH)
+            from selenium.webdriver.chrome.options import Options
+            chrome_options = Options()
+            chrome_options.add_argument("--window-size=800,600")
+            chrome_options.add_argument("--window-position=3000,0")
+            self.driver = webdriver.Chrome(executable_path=CHROME_PATH, chrome_options=chrome_options)
         else:
             self.driver = webdriver.PhantomJS(executable_path=PHANTOMJS_PATH, service_log_path=SERVICE_LOG_PATH)
         # move to BASE_URL page
@@ -56,6 +60,7 @@ class CGrabProject(QtGui.QDialog, Ui_MainFrom):
 
     def initAllComboBoxes(self):
         self.applyCmbChange('subject_id', '110000000000')
+
         self.applyCmbChange('subject_id', '101000000000')
 
         self.subjectsList = self.cmbFiller.getSubjects()
@@ -191,6 +196,7 @@ class CGrabProject(QtGui.QDialog, Ui_MainFrom):
             if not DEBUG:
                 self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_after.png')
             submit.click()
+
             self.parseInfo()
         except Exception as e:
             print '[GrabProject] Submit fatal error: "%s"' % (
@@ -218,13 +224,12 @@ class CGrabProject(QtGui.QDialog, Ui_MainFrom):
             while objCount > len(data):
                 data += re.findall(RE_DATA_PATTERN, self.driver.page_source)
                 self.loadProgress.setValue(len(data))
-                self.show()
                 if not DEBUG:
                     self.driver.save_screenshot(SERVICE_SCREENSHOT_PATH + 'screen_parse_datalen%s.png' % len(data))
                 d = self.driver.find_element_by_id('PC_7_015A1H40IOMCC0ACRHALLM30A1000000_js_es2')
                 d.click()
 
-            dlg = CResultForm(self, data)
+            dlg = CResultForm(None, data)
             dlg.setTableBody(data)
             dlg.exec_()
             self.loadProgress.setValue(0)
@@ -258,10 +263,10 @@ def main():
     try:
         print u"[GrabProject] Current programm version: %s" % VERSION
 
-        app = QtGui.QApplication(sys.argv)
+        QtGui.qApp = QtGui.QApplication(sys.argv)
         win = CGrabProject()
         win.show()
-        app.exec_()
+        QtGui.qApp.exec_()
     except Exception as e:
         QtGui.QMessageBox.warning(
             None,

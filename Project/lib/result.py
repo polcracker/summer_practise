@@ -8,7 +8,7 @@ from lib.tablemodel import CTableModel
 from ui.ui_result import Ui_ResultFrom
 
 
-class CResultForm(QtGui.QDialog, Ui_ResultFrom):   # drawing table for output
+class CResultForm(QtGui.QDialog, Ui_ResultFrom):
     def __init__(self, parent=None, body=[]):
         # initialize ui
         QtGui.QDialog.__init__(self, parent)
@@ -49,30 +49,30 @@ class CResultForm(QtGui.QDialog, Ui_ResultFrom):   # drawing table for output
         self.btnRepeate.clicked.connect(self.repeat)
         self.btnSave.clicked.connect(self.save)
 
-        self.tblResult.model().body = body # get body to export into csv
+        self.tblResult.model().body = body
 
         self.status = 0
 
     def setTableBody(self, data):
         self.tblResult.model().body = data
 
-    def closing(self): # event "close"
+    def closing(self):
         self.status = 0
         self.close()
 
-    def repeat(self): #event "repeat"
+    def repeat(self):
         self.status = 1
         self.close()
 
-    def save(self): #event "export into csv"
+    def save(self):
         try:
-            CExport(content=[self.tblModel.header] + self.tblResult.model().body, parent=self).exposeFile()
-            QtGui.QMessageBox.information(
-                self,
-                u'Выгрузка из реестра',
-                u'Выгрузка в файл успешно завершена!',
-                QtGui.QMessageBox.Ok
-            )
+            if CExport(content=[self.tblModel.header] + self.tblResult.model().body, parent=self).exposeFile():
+                QtGui.QMessageBox.information(
+                    self,
+                    u'Выгрузка из реестра',
+                    u'Выгрузка в файл успешно завершена!',
+                    QtGui.QMessageBox.Ok
+                )
         except Exception as e:
             QtGui.QMessageBox.warning(
                 self,

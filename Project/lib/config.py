@@ -14,10 +14,11 @@ CITY_BY_TYPE_URL = 'https://rosreestr.ru/wps/PA_FCCLPGUOReqService/ru.fccland.pg
 BASE_URL = 'https://rosreestr.ru/wps/portal/online_request'
 
 # Debug-mode
-DEBUG = False
+DEBUG = True
 # Path of webdriver
 PHANTOMJS_PATH = 'webdrivers/phantomjs.exe'
 CHROME_PATH = 'webdrivers/chromedriver.exe'
+GECKO_PATH = 'webdrivers/geckodriver.exe'
 # Path of log
 SERVICE_LOG_PATH = 'log/webdriver.log'
 SERVICE_SCREENSHOT_PATH = 'log/screenshots/'
