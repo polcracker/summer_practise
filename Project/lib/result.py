@@ -8,7 +8,7 @@ from lib.tablemodel import CTableModel
 from ui.ui_result import Ui_ResultFrom
 
 
-class CResultForm(QtGui.QDialog, Ui_ResultFrom):
+class CResultForm(QtGui.QDialog, Ui_ResultFrom):   # drawing table for output
     def __init__(self, parent=None, body=[]):
         # initialize ui
         QtGui.QDialog.__init__(self, parent)
@@ -49,22 +49,22 @@ class CResultForm(QtGui.QDialog, Ui_ResultFrom):
         self.btnRepeate.clicked.connect(self.repeat)
         self.btnSave.clicked.connect(self.save)
 
-        self.tblResult.model().body = body
+        self.tblResult.model().body = body # get body to export into csv
 
         self.status = 0
 
     def setTableBody(self, data):
         self.tblResult.model().body = data
 
-    def closing(self):
+    def closing(self): # event "close"
         self.status = 0
         self.close()
 
-    def repeat(self):
+    def repeat(self): #event "repeat"
         self.status = 1
         self.close()
 
-    def save(self):
+    def save(self): #event "export into csv"
         try:
             CExport(content=[self.tblModel.header] + self.tblResult.model().body, parent=self).exposeFile()
             QtGui.QMessageBox.information(
